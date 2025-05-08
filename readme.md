@@ -55,3 +55,17 @@ or you can use our demo datasets [chickenchicken](https://drive.google.com/file/
 ```bash
 bash scripts/chickenchicken.sh
 ```
+
+## Citation
+```bibtex
+@software{AutoSeg_SAM2,
+  author = {Zrporz},
+  title = {AutoSeg-SAM2},
+  year = {2024},
+  publisher = {GitHub},
+  url = {https://github.com/zrporz/AutoSeg-SAM2},
+  version = {Latest}, 
+  license = {MIT}, 
+  note = {Automated image segmentation tool based on Segment Anything Model (SAM)}
+}
+```
