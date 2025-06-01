@@ -2,3 +2,6 @@
 *.pt
 videos/*
 output/
+*.pyc
+output_example
+*.ipynb
