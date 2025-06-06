@@ -207,3 +207,5 @@ if __name__ == '__main__':
 
             value = dumps_npz({'masks': mask_records})
             txn.put(key=image_name.encode('utf-8'), value=value)
+
+    print('done embedding')
