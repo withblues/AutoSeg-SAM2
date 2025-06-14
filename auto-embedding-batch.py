@@ -39,7 +39,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--video_path",type=str,required=True)
     parser.add_argument("--output_dir",type=str,required=True)
-    parser.add_argument("--batch_size",type=int,default=20)
     parser.add_argument("--pred_iou_thresh",type=float,default=0.7)
     parser.add_argument("--box_nms_thresh",type=float,default=0.7)
     parser.add_argument("--stability_score_thresh",type=float,default=0.85)
