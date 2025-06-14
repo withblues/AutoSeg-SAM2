@@ -5,3 +5,7 @@ output/
 *.pyc
 output_example
 *.ipynb
+/slurm/
+*.out
+*.jpeg
+*.jpg
