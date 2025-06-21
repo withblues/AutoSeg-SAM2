@@ -43,6 +43,7 @@ if __name__ == '__main__':
     parser.add_argument("--box_nms_thresh",type=float,default=0.7)
     parser.add_argument("--stability_score_thresh",type=float,default=0.85)
     parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--points_per_batch", type=int, default=1024)
     args = parser.parse_args()
 
     # logging
@@ -59,7 +60,7 @@ if __name__ == '__main__':
     mask_generator = SamAutomaticMaskGenerator(
         model=sam,
         points_per_side=32,
-        points_per_batch=128,
+        points_per_batch=args.points_per_batch,
         pred_iou_thresh=args.pred_iou_thresh, 
         box_nms_thresh=args.box_nms_thresh, 
         stability_score_thresh=args.stability_score_thresh, 
@@ -84,6 +85,11 @@ if __name__ == '__main__':
             for image_name in batch_of_names:
                 image_path = os.path.join(image_dir, image_name)
                 image = cv2.imread(image_path)
+                
+                if image is None:
+                    logger.warning(f"Failed to load image: {image_path}")
+                    continue 
+                
                 image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
                 image_batch.append(image)
 
