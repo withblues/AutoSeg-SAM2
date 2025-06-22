@@ -12,13 +12,6 @@ import random
 import json
 from datetime import datetime
 
-def dumps_npz(data_dict, compress=True):
-    with io.BytesIO() as buffer:
-        if compress:
-            np.savez_compressed(buffer, **data_dict, allow_pickle=True)
-        else:
-            np.save(buffer, **data_dict, allow_pickle=True)
-        return buffer.getvalue()
 
 # load npz data from bytes
 def load_npz_from_bytes(npz_bytes):
@@ -26,18 +19,18 @@ def load_npz_from_bytes(npz_bytes):
         with np.load(f, allow_pickle=True) as data:
             return {k: data[k] for k in data.files}
         
-def process_single_image(image_data, image_path, coverage_threshold, min_new_area_contribution_ratio):
+def process_single_image(image_data, image_path, coverage_threshold, min_new_area_contribution_ratio, top_k_heuristic):
     image_name, masks, generate_visualizations = image_data
 
     try:
         # load image
-        image_path = os.path.join(image_path, image_name)
-        original_image = cv2.imread(image_path)
+        full_image_path = os.path.join(image_path, image_name)
+        original_image = cv2.imread(full_image_path)
         original_image = cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB)
         image_height, image_width = original_image.shape[:2]
 
         # iterative greedy mask selection
-        selected_masks_original_format = []
+        selected_masks = []
         selected_mask_composite_ids = set() 
 
         covered_area_mask = np.zeros((image_height, image_width), dtype=bool)
@@ -45,13 +38,53 @@ def process_single_image(image_data, image_path, coverage_threshold, min_new_are
         covered_pixels = 0
         min_new_area_mask = total_image_pixels * min_new_area_contribution_ratio
 
-        iteration_count = 0
-        max_iterations = len(masks) * 2
-
+        # save images for visualization
         rebuilding_frames = []
         if generate_visualizations:
-            rebuilding_frames.append((original_image.copy(), 0.0, len(masks)))
+            rebuilding_frames.append((original_image.copy(), 0.0, len(masks), 0.0))
 
+        # save mask to output
+        def _add_mask_to_selection(ann):
+            nonlocal covered_pixels, covered_area_mask
+
+            selected_mask_binary = ann['segmentation']
+            selected_mask_composite_ids.add((image_name, ann['id']))
+
+            reconstructed_ann = {k: v for k, v in ann.items() if k not in ['id', 'combined_score']}
+            selected_masks.append(reconstructed_ann)
+            
+            covered_area_mask |= selected_mask_binary
+            covered_pixels = np.sum(covered_area_mask)
+
+            # create next visualization frame
+            if generate_visualizations:
+                current_coverage_percentage = (covered_pixels / total_image_pixels) * 100
+
+                # use last frame for tnew one
+                overlay_image = rebuilding_frames[-1][0].copy()
+                overlay_image[selected_mask_binary] = (
+                    overlay_image[selected_mask_binary] * (1 - 0.4) + np.array([255, 0, 0], dtype=np.uint8) * 0.4
+                ).astype(np.uint8)
+
+                rebuilding_frames.append((overlay_image, current_coverage_percentage, len(masks), ann['combined_score']))
+
+        # extract mask based on predicted_iou & stability_score
+        for ann in masks:
+            ann['combined_score'] = ann.get('predicted_iou') + ann.get('stability_score')
+
+        sorted_masks_by_score = sorted(masks, key=lambda x: x['combined_score'], reverse=True)
+        
+        for ann in sorted_masks_by_score[:top_k_heuristic]:
+            if (image_name, ann['id']) not in selected_mask_composite_ids:
+                _add_mask_to_selection(ann)
+
+                if covered_pixels >= total_image_pixels * coverage_threshold:
+                    break
+        
+        # greedy completion
+        iteration_count = 0
+        max_iterations = len(masks) * 2
+        
         while covered_pixels < total_image_pixels * coverage_threshold and iteration_count < max_iterations:
             best_mask_idx = -1
             max_new_area = 0
@@ -68,32 +101,10 @@ def process_single_image(image_data, image_path, coverage_threshold, min_new_are
                     max_new_area = newly_covered_pixels
                     best_mask_idx = i
 
+            # add mask to ann
             if best_mask_idx != -1 and max_new_area >= min_new_area_mask:
-                selected_mask_ann = masks[best_mask_idx]
-                selected_mask_binary = selected_mask_ann['segmentation']
-                selected_mask_composite_ids.add((image_name, selected_mask_ann['id']))
-                
-                # update ann
-                reconstructed_ann = {k: v for k, v in selected_mask_ann.items() if k != 'id'}
-                reconstructed_ann['segmentation'] = selected_mask_binary
-                selected_masks_original_format.append(reconstructed_ann)
-                
-                # update covered area
-                covered_area_mask = np.logical_or(covered_area_mask, selected_mask_binary)
-                covered_pixels = np.sum(covered_area_mask)
-                
-                # create next visualization frame
-                if generate_visualizations:
-                    current_coverage_percentage = (covered_pixels / total_image_pixels) * 100
-
-                    # use last frame for tnew one
-                    overlay_image = rebuilding_frames[-1][0].copy()
-                    overlay_image[selected_mask_binary] = (
-                        overlay_image[selected_mask_binary] * (1 - 0.4) + np.array([255, 0, 0], dtype=np.uint8) * 0.4
-                    ).astype(np.uint8)
-
-                    rebuilding_frames.append((overlay_image, current_coverage_percentage, len(masks)))
-                
+                _add_mask_to_selection(masks[best_mask_idx])
+            
             else:
                 break
 
@@ -104,9 +115,9 @@ def process_single_image(image_data, image_path, coverage_threshold, min_new_are
         return {
             'status': 'success',
             'image_name': image_name,
-            'selected_mask_count': len(selected_masks_original_format),
+            'selected_mask_count': len(selected_masks),
             'final_coverage_percent': final_coverage_percent,
-            'selected_masks_data_for_lmdb': selected_masks_original_format,
+            'selected_masks_data_for_lmdb': selected_masks,
             'visual_frames': rebuilding_frames if generate_visualizations else None
         }
     
@@ -123,17 +134,17 @@ def save_rebuilding_frames_plot(image_name, rebuilding_frames, output_dir):
 
     fig, axes = plt.subplots(rows, cols, figsize=(cols * 4, rows * 4))
     axes = axes.flatten()
-    _, _, num_original_masks = rebuilding_frames[-1]
+    _, _, num_original_masks, _ = rebuilding_frames[-1]
     fig.suptitle(f"Progressive Rebuilding for: {image_name} \n Num Original Masks: {num_original_masks}", fontsize=16)
 
     for i in range(num_frames_to_display):
         ax = axes[i]
-        frame_image, coverage_percent, _ = rebuilding_frames[i]
+        frame_image, coverage_percent, _, combined_score= rebuilding_frames[i]
         ax.imshow(frame_image)
         if i == 0:
             ax.set_title(f"Original (0.0%)")
         else:
-            ax.set_title(f"Iter {i} ({coverage_percent:.1f}%)")
+            ax.set_title(f"Iter {i} ({coverage_percent:.1f}%) combined_score: {combined_score:.3f}")
         ax.axis('off')
     
     # Hide any unused subplots
@@ -171,7 +182,8 @@ if __name__ == '__main__':
     parser.add_argument("--output_dir",type=str,required=True)
     parser.add_argument("--coverage_threshold", type=float, default=1.0)
     parser.add_argument("--min_new_area_contribution_ratio", type=float, default=0.001)
-    parser.add_argument("--num_images_to_visualize", type=int, default=21)
+    parser.add_argument("--num_images_to_visualize", type=int, default=20)
+    parser.add_argument("--top_k", type=int, default=10)
     args = parser.parse_args()
 
     # paths
@@ -184,6 +196,7 @@ if __name__ == '__main__':
     coverage_threshold = args.coverage_threshold
     min_new_area_contribution_ratio =args.min_new_area_contribution_ratio
     num_images_to_visualize = args.num_images_to_visualize
+    top_k = args.top_k
 
     # get lmdb keys
     try:
@@ -207,6 +220,7 @@ if __name__ == '__main__':
         image_path=image_path,
         coverage_threshold=coverage_threshold,
         min_new_area_contribution_ratio=min_new_area_contribution_ratio,
+        top_k_heuristic=top_k
     )
 
     successful_count = 0
@@ -273,10 +287,11 @@ if __name__ == '__main__':
         "source_image_path": image_path,
         "source_mask_path": lmdb_path,
         "output_path": output_path,
-        "generation_timestamp_utc": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+        "generation_timestamp_utc": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "processing_parameters": {
             "coverage_threshold": coverage_threshold,
             "min_new_area_contribution_ratio": min_new_area_contribution_ratio,
+            "top_k_heuristic": top_k
         },
         "stats": {
             "total_source_images": total_images,
