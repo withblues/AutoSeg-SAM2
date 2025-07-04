@@ -73,7 +73,9 @@ def process_single_image(image_data, image_path, coverage_threshold, min_new_are
             ann['combined_score'] = ann.get('predicted_iou') + ann.get('stability_score')
 
         sorted_masks_by_score = sorted(masks, key=lambda x: x['combined_score'], reverse=True)
-        
+
+        # OLD approach is remove line below
+        top_k_heuristic = int(round(len(masks) * top_k_heuristic, 0))
         for ann in sorted_masks_by_score[:top_k_heuristic]:
             if (image_name, ann['id']) not in selected_mask_composite_ids:
                 _add_mask_to_selection(ann)
@@ -128,14 +130,14 @@ def save_rebuilding_frames_plot(image_name, rebuilding_frames, output_dir):
     if not rebuilding_frames:
         return
       
-    num_frames_to_display = min(len(rebuilding_frames), 12)
+    num_frames_to_display = len(rebuilding_frames)
     cols = 4
     rows = int(np.ceil(num_frames_to_display / cols))
 
     fig, axes = plt.subplots(rows, cols, figsize=(cols * 4, rows * 4))
     axes = axes.flatten()
-    _, _, num_original_masks, _ = rebuilding_frames[-1]
-    fig.suptitle(f"Progressive Rebuilding for: {image_name} \n Num Original Masks: {num_original_masks}", fontsize=16)
+    _, _, num_original_masks, combined_score = rebuilding_frames[-1]
+    fig.suptitle(f"Progressive Rebuilding for: {image_name} \n Num Original Masks: {num_original_masks} \n Num Selected Masks: {len(rebuilding_frames) - 1}", fontsize=16)
 
     for i in range(num_frames_to_display):
         ax = axes[i]
@@ -182,8 +184,8 @@ if __name__ == '__main__':
     parser.add_argument("--output_dir",type=str,required=True)
     parser.add_argument("--coverage_threshold", type=float, default=1.0)
     parser.add_argument("--min_new_area_contribution_ratio", type=float, default=0.001)
-    parser.add_argument("--num_images_to_visualize", type=int, default=20)
-    parser.add_argument("--top_k", type=int, default=10)
+    parser.add_argument("--num_images_to_visualize", type=int, default=25)
+    parser.add_argument("--top_k", type=float, default=0.8)
     args = parser.parse_args()
 
     # paths
