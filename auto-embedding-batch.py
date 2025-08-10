@@ -57,6 +57,7 @@ if __name__ == '__main__':
     ##### load Sam1 Model #####
     sam_ckpt_path="checkpoints/sam1/sam_vit_h_4b8939.pth"
     sam = sam_model_registry["vit_h"](checkpoint=sam_ckpt_path).to('cuda')
+
     mask_generator = SamAutomaticMaskGenerator(
         model=sam,
         points_per_side=32,
@@ -94,26 +95,35 @@ if __name__ == '__main__':
                 image_batch.append(image)
 
             # generate mask
-            masks = mask_generator.generate(image_batch)
+            masks, image_encoder_data = mask_generator.generate(image_batch)
 
-            for image_name, masks_for_one_image in zip(batch_of_names, masks):
+   
+            for idx, image_name in enumerate(batch_of_names):
                 logger.info(f"Saving masks for image: {image_name}")
+                save_dict = {}
 
-                mask_records = []
-                for mask in masks_for_one_image:
-                    mask_data = {
-                        'segmentation': mask['segmentation'].astype(np.bool_),
-                        'area': mask['area'],
-                        'bbox': mask['bbox'],
-                        'predicted_iou': mask['predicted_iou'],
-                        'point_coords': mask['point_coords'],
-                        'stability_score': mask['stability_score'],
-                        'crop_box': mask['crop_box'],
-                        'embeddings': np.array(mask['embeddings'], dtype=np.float32) if 'embeddings' in mask else None,
-                    }
-                    mask_records.append(mask_data)
+                # iterate over each size key in the masks dict
+                for size_key, masks_for_size in masks.items():
+                    mask_records = []
+   
+                    for mask in masks_for_size[idx]:
+                        mask_data = {
+                            'segmentation': mask['segmentation'].astype(np.bool_),
+                            'area': mask['area'],
+                            'bbox': mask['bbox'],
+                            'predicted_iou': mask['predicted_iou'],
+                            'point_coords': mask['point_coords'],
+                            'stability_score': mask['stability_score'],
+                            'crop_box': mask['crop_box'],
+                            'embeddings': np.array(mask['embeddings'], dtype=np.float32) if 'embeddings' in mask else None,
+                        }
+                        mask_records.append(mask_data)
+                    
+                    save_dict[size_key] = mask_records
 
-                value = dumps_npz({'masks': mask_records})
+                save_dict["image_encoder_data"] = image_encoder_data[idx]
+
+                value = dumps_npz(save_dict)
                 txn.put(key=image_name.encode('utf-8'), value=value)
 
     logger.info("Processing complete.")
