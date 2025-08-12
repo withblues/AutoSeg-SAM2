@@ -72,7 +72,7 @@ if __name__ == '__main__':
     parser.add_argument("--box_nms_thresh",type=float,default=0.7)
     parser.add_argument("--stability_score_thresh",type=float,default=0.85)
     parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--points_per_batch", type=int, default=1024)
+    parser.add_argument("--points_per_batch", type=int, default=64)
     args = parser.parse_args()
 
     # logging
