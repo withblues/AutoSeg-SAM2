@@ -10,6 +10,7 @@ import lmdb
 import msgpack
 import io
 from tqdm import tqdm
+from torch.utils.data import Dataset, DataLoader
 
 # use bfloat16 for the entire notebook
 torch.autocast(device_type="cuda", dtype=torch.bfloat16).__enter__()
@@ -31,9 +32,37 @@ def dumps_npz(data_dict, compress=True):
             np.save(buffer, **data_dict, allow_pickle=True)
         return buffer.getvalue()
 
-def create_batches(data_list, batch_size):
-    for i in range(0, len(data_list), batch_size):
-        yield data_list[i:i + batch_size]
+
+class ImageDataset(Dataset):
+    def __init__(self, image_names, image_dir):
+        self.image_names = image_names
+        self.image_dir = image_dir
+
+    def __len__(self):
+        return len(self.image_names)
+
+    def __getitem__(self, idx):
+        image_name = self.image_names[idx]
+        image_path = os.path.join(self.image_dir, image_name)
+        image = cv2.imread(image_path)
+
+        if image is None:
+            logger.warning(f"Failed to load image: {image_path}. Skipping.")
+            return None
+
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        
+        return image, image_name
+
+def custom_collate_fn(batch):
+    batch = [item for item in batch if item is not None]
+
+    if not batch:
+        return None, None
+    
+    images, names = zip(*batch)
+    
+    return list(images), list(names)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -74,30 +103,27 @@ if __name__ == '__main__':
         if os.path.splitext(p)[-1] in [".jpg", ".jpeg", ".JPG", ".JPEG"]
     ]
 
+
+    dataset = ImageDataset(image_names=image_names, image_dir=image_dir)
+    dataloader = DataLoader(
+        dataset,
+        batch_size=args.batch_size,
+        num_workers=4,
+        collate_fn=custom_collate_fn,
+        pin_memory=True
+    )
+
     lmdb_path = os.path.join(args.output_dir, f"masks.lmdb")
     env = lmdb.open(lmdb_path, map_size=1099511627776)
+    
+    for image_batch, batch_of_names in tqdm(dataloader):
+        if image_batch is None:
+            continue
 
-    image_name_batches = create_batches(image_names, args.batch_size)
+        # generate mask
+        masks, image_encoder_data = mask_generator.generate(image_batch)
 
-    with env.begin(write=True) as txn:
-        for batch_of_names in tqdm(image_name_batches, total=len(image_names) // args.batch_size + 1):
-            
-            image_batch = []
-            for image_name in batch_of_names:
-                image_path = os.path.join(image_dir, image_name)
-                image = cv2.imread(image_path)
-                
-                if image is None:
-                    logger.warning(f"Failed to load image: {image_path}")
-                    continue 
-                
-                image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-                image_batch.append(image)
-
-            # generate mask
-            masks, image_encoder_data = mask_generator.generate(image_batch)
-
-   
+        with env.begin(write=True) as txn:
             for idx, image_name in enumerate(batch_of_names):
                 logger.info(f"Saving masks for image: {image_name}")
                 save_dict = {}
@@ -105,7 +131,7 @@ if __name__ == '__main__':
                 # iterate over each size key in the masks dict
                 for size_key, masks_for_size in masks.items():
                     mask_records = []
-   
+
                     for mask in masks_for_size[idx]:
                         mask_data = {
                             'segmentation': mask['segmentation'].astype(np.bool_),
@@ -125,5 +151,8 @@ if __name__ == '__main__':
 
                 value = dumps_npz(save_dict)
                 txn.put(key=image_name.encode('utf-8'), value=value)
+        
+        del masks, image_encoder_data, image_batch
+        torch.cuda.empty_cache()
 
     logger.info("Processing complete.")
