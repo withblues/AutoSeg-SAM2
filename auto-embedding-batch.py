@@ -90,7 +90,6 @@ if __name__ == '__main__':
     mask_generator = SamAutomaticMaskGenerator(
         model=sam,
         points_per_side=32,
-        points_per_batch=args.points_per_batch,
         pred_iou_thresh=args.pred_iou_thresh, 
         box_nms_thresh=args.box_nms_thresh, 
         stability_score_thresh=args.stability_score_thresh, 
@@ -108,7 +107,7 @@ if __name__ == '__main__':
     dataloader = DataLoader(
         dataset,
         batch_size=args.batch_size,
-        num_workers=4,
+        num_workers=2,
         collate_fn=custom_collate_fn,
         pin_memory=True
     )
@@ -128,26 +127,23 @@ if __name__ == '__main__':
                 logger.info(f"Saving masks for image: {image_name}")
                 save_dict = {}
 
-                # iterate over each size key in the masks dict
-                for size_key, masks_for_size in masks.items():
-                    mask_records = []
-
-                    for mask in masks_for_size[idx]:
-                        mask_data = {
-                            'segmentation': mask['segmentation'].astype(np.bool_),
-                            'area': mask['area'],
-                            'bbox': mask['bbox'],
-                            'predicted_iou': mask['predicted_iou'],
-                            'point_coords': mask['point_coords'],
-                            'stability_score': mask['stability_score'],
-                            'crop_box': mask['crop_box'],
-                            'embeddings': np.array(mask['embeddings'], dtype=np.float32) if 'embeddings' in mask else None,
-                        }
-                        mask_records.append(mask_data)
+                mask_records = []
+                for mask in masks[idx]:
+                    mask_data = {
+                        'segmentation': mask['segmentation'].astype(np.bool_),
+                        'area': mask['area'],
+                        'bbox': mask['bbox'],
+                        'predicted_iou': mask['predicted_iou'],
+                        'point_coords': mask['point_coords'],
+                        'stability_score': mask['stability_score'],
+                        'crop_box': mask['crop_box'],
+                        'embeddings': np.array(mask['embeddings'], dtype=np.float32) if 'embeddings' in mask else None,
+                    }
+                    mask_records.append(mask_data)
                     
-                    save_dict[size_key] = mask_records
+                    save_dict['mask_l'] = mask_records
 
-                save_dict["image_encoder_data"] = image_encoder_data[idx]
+                save_dict["image_encoder"] = image_encoder_data[idx]
 
                 value = dumps_npz(save_dict)
                 txn.put(key=image_name.encode('utf-8'), value=value)
