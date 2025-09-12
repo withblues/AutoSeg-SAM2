@@ -3,8 +3,9 @@ import argparse
 import math
 import sys
 from pathlib import Path
+import random
 
-def create_subsets(source_dir, dest_base_dir, num_subsets):
+def create_subsets(source_dir, dest_base_dir, num_subsets, fraction):
     """
     Splits image files from a source directory into a specified number of subsets
     using symbolic links to avoid data duplication.
@@ -34,6 +35,9 @@ def create_subsets(source_dir, dest_base_dir, num_subsets):
         print("Error: No images found in the source directory.")
         sys.exit(1)
     
+    keep_count = max(1, int(total_images * fraction))
+    image_paths = random.sample(image_paths, keep_count)
+    total_images = len(image_paths)
     print(f"Found {total_images} images.")
 
     if num_subsets > total_images:
@@ -89,6 +93,7 @@ if __name__ == "__main__":
                         help="Path to the base directory where subset folders will be created.")
     parser.add_argument("--num_subsets", type=int, required=True,
                         help="The number of subsets to create (e.g., 4 for 4 GPUs).")
+    parser.add_argument("--fraction", type=float, required=True)
 
     args = parser.parse_args()
     create_subsets(args.source_dir, args.dest_dir, args.num_subsets)
