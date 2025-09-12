@@ -86,6 +86,7 @@ if __name__ == '__main__':
     image_dir = args.video_path
     base_dir = args.output_dir
 
+
     ##### load Sam1 Model #####
     sam_ckpt_path="checkpoints/sam1/sam_vit_h_4b8939.pth"
     sam = sam_model_fast_registry["vit_h"](checkpoint=sam_ckpt_path).to('cuda')
@@ -99,17 +100,36 @@ if __name__ == '__main__':
         # min_mask_region_area=100,
         # mask_type='d',
         output_mode='coco_rle',
-        process_batch_size=4,
+        process_batch_size=2,
     )
 
+    # open lmdb file / create
+    masks_lmdb_path = os.path.join(args.output_dir, "masks.lmdb")
+    env_masks = lmdb.open(masks_lmdb_path, map_size=1099511627776, writemap=False)
+
     # scan all the JPEG frame names in this directory
-    image_names = [
+    all_image_names = sorted([
         p for p in os.listdir(image_dir)
         if os.path.splitext(p)[-1] in [".jpg", ".jpeg", ".JPG", ".JPEG"]
-    ]
+    ])
+
+    processed_keys = set()
+    with env_masks.begin(write=False) as txn:
+        cursor = txn.cursor()
+        for key in cursor.iternext(values=False):
+            processed_keys.add(key.decode('utf-8'))
 
 
-    dataset = ImageDataset(image_names=image_names, image_dir=image_dir)
+    # filters images to process
+    image_names_to_process = [name for name in all_image_names if name not in processed_keys]
+
+    if not image_names_to_process:
+        logger.info("All images already processed. Re-generating final mapper and exiting.")
+        # We still re-generate the map file to ensure it's up-to-date.
+    else:
+        logger.info(f"Resuming. Found {len(processed_keys)} completed images. {len(image_names_to_process)} remaining.")
+
+    dataset = ImageDataset(image_names=image_names_to_process, image_dir=image_dir)
     dataloader = DataLoader(
         dataset,
         batch_size=args.batch_size,
@@ -119,22 +139,10 @@ if __name__ == '__main__':
     )
 
 
-    #### LMDB
-    # embeddings lmdb
-    # embed_lmdb_path = os.path.join(args.output_dir, "embeddings.lmdb")
-    # env_embed = lmdb.open(embed_lmdb_path, map_size=1099511627776, writemap=True)
-
-    # mask lmdb
-    masks_lmdb_path = os.path.join(args.output_dir, "masks.lmdb")
-    env_masks = lmdb.open(masks_lmdb_path, map_size=1099511627776, writemap=True)
-
     write_batch_size = 128
     embed_buffer = []
     mask_buffer = []
 
-    # lmdb mapper
-    mapper = {}
-    subset = os.path.basename(args.output_dir)
 
     for image_batch, name_batch in tqdm(dataloader):
         if image_batch is None:
@@ -165,29 +173,20 @@ if __name__ == '__main__':
         mask_value = dumps_msgpack_zstd(mask_save_dict)
         mask_buffer.append({'key': image_name, 'value': mask_value})
 
-        #embed_value = image_encoder_data.astype(np.float16).tobytes()
-        #embed_buffer.append({'key': image_name, 'value': embed_value})
 
         # save data 
         if len(mask_buffer) >= write_batch_size:
             logger.info(f"Saving masks")
             with env_masks.begin(write=True) as txn_masks:
-                 #env_embed.begin(write=True) as txn_embed:
-                
                 for item in mask_buffer:
                     txn_masks.put(key=item['key'].encode('utf-8'), value=item['value'])
-                
-                # for item in embed_buffer:
-                #     txn_embed.put(key=item['key'].encode('utf-8'), value=item['value'])
+
 
             # clear buffers
             mask_buffer = []
             embed_buffer = []
 
             logger.info(f"Done saving masks")
-
-        # add image key to mapper
-        mapper[image_name] = subset
 
         del masks, image_batch
         torch.cuda.empty_cache()
@@ -200,13 +199,19 @@ if __name__ == '__main__':
             for item in mask_buffer:
                 txn_masks.put(key=item['key'].encode('utf-8'), value=item['value'])
             
-            # for item in embed_buffer:
-            #     txn_embed.put(key=item['key'].encode('utf-8'), value=item['value'])
 
     logger.info("saving mapper json")
+    # lmdb mapper
+    mapper = {}
+    subset = os.path.basename(args.output_dir)
+
+    with env_masks.begin(write=False) as txn:
+        cursor = txn.cursor()
+        for key in cursor.iternext(values=False):
+            mapper[key.decode('utf-8')] = subset
+
     with open(os.path.join(args.output_dir, 'map.json'), 'w') as fp:
         json.dump(mapper, fp, indent=2)
 
     env_masks.close()
-    #env_embed.close()
     logger.info("Processing complete. All databases closed.")
