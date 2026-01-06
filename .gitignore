@@ -10,3 +10,4 @@ output_example
 *.jpeg
 *.jpg
 example
+/slu*/
