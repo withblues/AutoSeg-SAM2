@@ -11,3 +11,6 @@ output_example
 *.jpg
 example
 /slu*/
+/data/
+videos
+output
