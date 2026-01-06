@@ -158,7 +158,7 @@ def save_rebuilding_frames_plot(image_name, rebuilding_frames, output_dir):
     plt.close(fig) 
     print(f"saved rebuilding frames visualization for {image_name}")
 
-def data_generator(lmdb_path, images_for_visualization):
+def data_generator(lmdb_path, images_for_visualization, mask_type):
     env = lmdb.open(lmdb_path, readonly=True, lock=False, readahead=False)
     with env.begin() as txn:
         for key, value in txn.cursor():
@@ -166,7 +166,7 @@ def data_generator(lmdb_path, images_for_visualization):
 
             try:
                 npz_data = load_npz_from_bytes(value)
-                masks = [{'id': idx, **ann} for idx, ann in enumerate(npz_data['masks'])]
+                masks = [{'id': idx, **ann} for idx, ann in enumerate(npz_data[mask_type])]
                 visualize_this_image = image_name in images_for_visualization
                 
                 yield (image_name, masks, visualize_this_image)
@@ -186,6 +186,7 @@ if __name__ == '__main__':
     parser.add_argument("--min_new_area_contribution_ratio", type=float, default=0.001)
     parser.add_argument("--num_images_to_visualize", type=int, default=25)
     parser.add_argument("--top_k", type=float, default=0.8)
+    parser.add_argument("--mask_type", type=str, default='l')
     args = parser.parse_args()
 
     # paths
@@ -204,7 +205,8 @@ if __name__ == '__main__':
     try:
         env = lmdb.open(lmdb_path, readonly=True, lock=False, readahead=False)
         with env.begin() as txn:
-            image_names = [key.decode('utf-8') for key, _ in tqdm(txn.cursor())]
+            cursor = txn.cursor()
+            image_names = [key.decode('utf-8') for key in tqdm(cursor.iternext(keys=True, values=False), desc='collecting image keys')]
         env.close()
 
     except lmdb.Error as e:
@@ -234,7 +236,7 @@ if __name__ == '__main__':
     try:
         env_output = lmdb.open(lmdb_output_path, map_size=1099511627776)
         with env_output.begin(write=True) as txn_output, Pool(num_processes) as pool:
-            data_iter = data_generator(lmdb_path, images_for_visualization)
+            data_iter = data_generator(lmdb_path, images_for_visualization, args.mask_type)
 
             p_bar = tqdm(
                 pool.imap_unordered(worker_func_partial, data_iter),

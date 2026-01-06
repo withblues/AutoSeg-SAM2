@@ -5,6 +5,9 @@ import sys
 from pathlib import Path
 import random
 
+random.seed(42)
+
+
 def create_subsets(source_dir, dest_base_dir, num_subsets, fraction):
     """
     Splits image files from a source directory into a specified number of subsets
@@ -96,4 +99,4 @@ if __name__ == "__main__":
     parser.add_argument("--fraction", type=float, required=True)
 
     args = parser.parse_args()
-    create_subsets(args.source_dir, args.dest_dir, args.num_subsets)
+    create_subsets(args.source_dir, args.dest_dir, args.num_subsets, args.fraction)
